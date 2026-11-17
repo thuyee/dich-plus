@@ -141,14 +141,18 @@ object Engine {
         else -> listOf(latin)
     }
 
-    /** OCR ảnh -> dịch từng khối chữ -> vẽ bản dịch đè lên ảnh gốc. */
-    suspend fun translateImage(bmp: Bitmap, src: String, tgt: String): Bitmap {
-        val image = InputImage.fromBitmap(bmp, 0)
+    suspend fun recognize(image: InputImage, src: String): Text? {
         var best: Text? = null
         for (r in recognizers(src)) {
             val t = r.process(image).await()
             if (best == null || t.text.length > best.text.length) best = t
         }
+        return best
+    }
+
+    /** OCR ảnh -> dịch từng khối chữ -> vẽ bản dịch đè lên ảnh gốc. */
+    suspend fun translateImage(bmp: Bitmap, src: String, tgt: String): Bitmap {
+        val best = recognize(InputImage.fromBitmap(bmp, 0), src)
         val blocks = best?.textBlocks.orEmpty().filter { it.boundingBox != null && it.text.isNotBlank() }
         val gate = Semaphore(4)
         val items = coroutineScope {
@@ -166,7 +170,7 @@ object Engine {
         return render(bmp, items)
     }
 
-    private suspend fun blockTranslate(txt: String, src: String, tgt: String): String? {
+    suspend fun blockTranslate(txt: String, src: String, tgt: String): String? {
         if (engine() == "mlkit") {
             val d = detect(txt)
             if (d == tgt) return null

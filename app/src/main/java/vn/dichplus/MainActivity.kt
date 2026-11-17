@@ -226,7 +226,17 @@ fun App() {
         return
     }
 
-    Column(Modifier.fillMaxSize().background(BgOuter).systemBarsPadding()) {
+    if (screen == "camera") {
+        BackHandler { screen = "main"; status = null }
+        CameraScreen(
+            src = src, tgt = tgt, status = status,
+            onBack = { screen = "main"; status = null },
+            onSrc = { pick = "src" }, onTgt = { pick = "tgt" },
+            onSwap = { val ns = if (src == "auto") detected else src; if (ns != null) { val t = tgt; tgt = ns; src = t } },
+            onPickGallery = { pickPic.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onPhoto = { processUri(it) }
+        )
+    } else Column(Modifier.fillMaxSize().background(BgOuter).systemBarsPadding()) {
         Column(
             Modifier.weight(1f).fillMaxWidth()
                 .clip(RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp))
@@ -324,7 +334,7 @@ fun App() {
                     .clickable { listen(if (src == "auto") null else src) },
                 contentAlignment = Alignment.Center
             ) { Icon(Icons.Filled.Mic, "Nói", tint = SalmonDark, modifier = Modifier.size(38.dp)) }
-            SideButton(Icons.Filled.CameraAlt, "Máy ảnh") { showCamera = true }
+            SideButton(Icons.Filled.CameraAlt, "Máy ảnh") { screen = "camera" }
         }
     }
 
@@ -433,7 +443,8 @@ fun App() {
                     Text(
                         "• Bấm “Dịch màn hình” → cho phép chụp màn hình → bong bóng nổi xuất hiện.\n" +
                             "• Chạm bong bóng để dịch, chạm màn hình để đóng bản dịch.\n" +
-                            "• Nhấn giữ bong bóng (hoặc nút Tắt ở thông báo) để tắt.\n" +
+                            "• Nhấn giữ bong bóng để chọn Mở ứng dụng / Tắt.\n" +
+                            "• Bật nhanh: kéo thanh thông báo → sửa ô → thêm “Dịch màn hình”, hoặc thêm widget ở màn hình chính.\n" +
                             "• Ngôn ngữ lấy theo hai nút ở màn hình chính.\n" +
                             "• Không quảng cáo, không theo dõi.",
                         color = Color(0xFFE0E0E0), fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp)

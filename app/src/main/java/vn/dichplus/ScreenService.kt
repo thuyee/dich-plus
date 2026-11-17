@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
@@ -29,8 +30,10 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import android.service.quicksettings.TileService
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.IntentCompat
@@ -47,6 +50,7 @@ class ScreenService : Service() {
     companion object {
         const val ACTION_STOP = "vn.dichplus.STOP"
         const val CHANNEL = "screen_translate"
+        @Volatile var running = false
     }
 
     private lateinit var wm: WindowManager
@@ -55,7 +59,8 @@ class ScreenService : Service() {
     private var projection: MediaProjection? = null
     private var reader: ImageReader? = null
     private var display: VirtualDisplay? = null
-    private var bubble: TextView? = null
+    private var bubble: View? = null
+    private var menu: View? = null
     private var result: FrameLayout? = null
     private var pending = false
     private var busy = false
@@ -80,7 +85,7 @@ class ScreenService : Service() {
         val n = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_search)
             .setContentTitle("Dịch màn hình đang bật")
-            .setContentText("Chạm bong bóng để dịch. Nhấn giữ bong bóng để tắt.")
+            .setContentText("Chạm bong bóng để dịch. Nhấn giữ để mở app hoặc tắt.")
             .addAction(0, "Tắt", stopPi)
             .setOngoing(true)
             .build()
@@ -98,6 +103,8 @@ class ScreenService : Service() {
         }
         setupCapture()
         showBubble()
+        running = true
+        refreshTile()
         return START_NOT_STICKY
     }
 
@@ -140,14 +147,18 @@ class ScreenService : Service() {
         return if (rowPad == 0) full else Bitmap.createBitmap(full, 0, 0, img.width, img.height)
     }
 
+    private fun refreshTile() {
+        runCatching { TileService.requestListeningState(this, ComponentName(this, ScreenTileService::class.java)) }
+    }
+
     private fun showBubble() {
         val d = resources.displayMetrics.density
         val size = (52 * d).toInt()
-        val tv = TextView(this).apply {
-            text = "文A"
-            textSize = 15f
-            setTextColor(Color.rgb(0x5C, 0x19, 0x00))
-            gravity = Gravity.CENTER
+        val tv = ImageView(this).apply {
+            setImageResource(R.drawable.ic_translate)
+            setColorFilter(Color.rgb(0x5C, 0x19, 0x00))
+            val pad = (13 * d).toInt()
+            setPadding(pad, pad, pad, pad)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(Color.rgb(0xFF, 0xB4, 0xA1))
@@ -161,23 +172,25 @@ class ScreenService : Service() {
         ).apply { gravity = Gravity.TOP or Gravity.START; x = 0; y = (220 * d).toInt() }
 
         var sx = 0; var sy = 0; var tx = 0f; var ty = 0f
-        var moved = false; var downAt = 0L
+        var moved = false; var longFired = false
+        val longRun = Runnable { if (!moved) { longFired = true; showMenu(lp) } }
         tv.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
                     sx = lp.x; sy = lp.y; tx = e.rawX; ty = e.rawY
-                    moved = false; downAt = SystemClock.uptimeMillis(); true
+                    moved = false; longFired = false
+                    handler.postDelayed(longRun, 600)
+                    true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - tx; val dy = e.rawY - ty
-                    if (abs(dx) > 12 || abs(dy) > 12) moved = true
+                    if (abs(dx) > 12 || abs(dy) > 12) { moved = true; handler.removeCallbacks(longRun) }
                     if (moved) { lp.x = sx + dx.toInt(); lp.y = sy + dy.toInt(); wm.updateViewLayout(tv, lp) }
                     true
                 }
-                MotionEvent.ACTION_UP -> {
-                    if (!moved) {
-                        if (SystemClock.uptimeMillis() - downAt > 800) stopSelf() else capture()
-                    }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    handler.removeCallbacks(longRun)
+                    if (!moved && !longFired && e.action == MotionEvent.ACTION_UP) capture()
                     true
                 }
                 else -> false
@@ -187,8 +200,54 @@ class ScreenService : Service() {
         bubble = tv
     }
 
+    /** Menu khi nhấn giữ bong bóng: Mở ứng dụng / Tắt. */
+    private fun showMenu(anchor: WindowManager.LayoutParams) {
+        dismissMenu()
+        val d = resources.displayMetrics.density
+        fun item(t: String, action: () -> Unit) = TextView(this).apply {
+            text = t
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            val ph = (22 * d).toInt(); val pv = (14 * d).toInt()
+            setPadding(ph, pv, ph, pv)
+            setOnClickListener { dismissMenu(); action() }
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply { setColor(Color.rgb(0x2B, 0x2B, 0x2B)); cornerRadius = 16 * d }
+            elevation = 8 * d
+            val p = (4 * d).toInt(); setPadding(p, p, p, p)
+            addView(item("Mở ứng dụng") {
+                startActivity(Intent(this@ScreenService, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            })
+            addView(item("Tắt dịch màn hình") { stopSelf() })
+            setOnTouchListener { _, e ->
+                if (e.action == MotionEvent.ACTION_OUTSIDE) { dismissMenu(); true } else false
+            }
+        }
+        val screenW = screenSize().first
+        val lp = WindowManager.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = if (anchor.x > screenW / 2) anchor.x - (190 * d).toInt() else anchor.x + (60 * d).toInt()
+            y = anchor.y
+        }
+        wm.addView(box, lp)
+        menu = box
+    }
+
+    private fun dismissMenu() {
+        menu?.let { runCatching { wm.removeView(it) } }
+        menu = null
+    }
+
     private fun capture() {
         if (busy) return
+        dismissMenu()
         busy = true
         bubble?.visibility = View.INVISIBLE
         pending = true
@@ -256,6 +315,9 @@ class ScreenService : Service() {
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
     override fun onDestroy() {
+        running = false
+        refreshTile()
+        dismissMenu()
         scope.cancel()
         handler.removeCallbacksAndMessages(null)
         result?.let { runCatching { wm.removeView(it) } }

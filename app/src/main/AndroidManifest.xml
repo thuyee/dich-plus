@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -9,9 +11,15 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="Dịch Plus"
         android:theme="@style/AppTheme">
+
+        <!-- tải sẵn model OCR của Google Play Services khi cài app -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr,ocr_chinese,ocr_japanese,ocr_korean,ocr_devanagari" />
 
         <activity
             android:name=".MainActivity"
@@ -23,10 +31,42 @@
             </intent-filter>
         </activity>
 
+        <!-- Activity trong suốt: xin quyền chụp màn hình rồi bật dịch màn hình (dùng cho ô cài đặt nhanh & widget) -->
+        <activity
+            android:name=".ProjectionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/TransparentTheme" />
+
         <service
             android:name=".ScreenService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- Ô cài đặt nhanh (kéo thanh thông báo xuống → bút chì → kéo "Dịch màn hình" lên) -->
+        <service
+            android:name=".ScreenTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_translate"
+            android:label="Dịch màn hình"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- Widget màn hình chính -->
+        <receiver
+            android:name=".ScreenWidget"
+            android:exported="true"
+            android:label="Dịch màn hình">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"
