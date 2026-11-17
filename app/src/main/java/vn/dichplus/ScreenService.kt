@@ -278,12 +278,34 @@ class ScreenService : Service() {
     }
 
     private fun showResult(out: Bitmap) {
+        val d = resources.displayMetrics.density
         val iv = ImageView(this).apply {
             setImageBitmap(out)
             scaleType = ImageView.ScaleType.FIT_XY
         }
+        fun pillBtn(t: String, action: () -> Unit) = TextView(this).apply {
+            text = t
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            val ph = (22 * d).toInt(); val pv = (12 * d).toInt()
+            setPadding(ph, pv, ph, pv)
+            setOnClickListener { action() }
+        }
+        val pill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = GradientDrawable().apply { setColor(Color.argb(235, 32, 32, 32)); cornerRadius = 28 * d }
+            elevation = 10 * d
+            addView(pillBtn("Lưu ảnh") {
+                toast(if (Engine.saveToGallery(this@ScreenService, out)) "Đã lưu vào Pictures/DichPlus" else "Cần Android 10 trở lên để lưu ảnh")
+            })
+            addView(pillBtn("Đóng") { dismissResult() })
+        }
         val root = FrameLayout(this).apply {
             addView(iv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(pill, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                bottomMargin = (96 * d).toInt()
+            })
             setOnClickListener { dismissResult() }
         }
         val lp = WindowManager.LayoutParams(
@@ -300,7 +322,6 @@ class ScreenService : Service() {
         }
         wm.addView(root, lp)
         result = root
-        toast("Chạm vào màn hình để đóng bản dịch")
     }
 
     private fun dismissResult() {

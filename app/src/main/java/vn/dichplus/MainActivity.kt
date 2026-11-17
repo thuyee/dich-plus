@@ -25,6 +25,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -43,7 +45,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -460,10 +464,34 @@ fun App() {
 
     resultBmp?.let { bmp ->
         Dialog({ resultBmp = null }, DialogProperties(usePlatformDefaultWidth = false)) {
+            var scale by remember { mutableStateOf(1f) }
+            var off by remember { mutableStateOf(Offset.Zero) }
+            val tstate = rememberTransformableState { zoom, pan, _ ->
+                scale = (scale * zoom).coerceIn(1f, 5f)
+                off = if (scale <= 1.01f) Offset.Zero else off + pan
+            }
             Box(Modifier.fillMaxSize().background(Color.Black)) {
-                Image(bmp.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                Image(
+                    bmp.asImageBitmap(), null,
+                    Modifier.fillMaxSize()
+                        .graphicsLayer(scaleX = scale, scaleY = scale, translationX = off.x, translationY = off.y)
+                        .transformable(tstate),
+                    contentScale = ContentScale.Fit
+                )
                 IconButton({ resultBmp = null }, Modifier.align(Alignment.TopEnd).statusBarsPadding()) {
                     Icon(Icons.Filled.Close, "Đóng", tint = Color.White)
+                }
+                Row(
+                    Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    FilledTonalButton({
+                        val ok = Engine.saveToGallery(ctx, bmp)
+                        Toast.makeText(ctx, if (ok) "Đã lưu vào Pictures/DichPlus" else "Cần Android 10 trở lên để lưu ảnh", Toast.LENGTH_SHORT).show()
+                    }) { Icon(Icons.Filled.Download, null); Spacer(Modifier.width(8.dp)); Text("Lưu ảnh") }
+                    FilledTonalButton({ Engine.shareBitmap(ctx, bmp) }) {
+                        Icon(Icons.Filled.Share, null); Spacer(Modifier.width(8.dp)); Text("Chia sẻ")
+                    }
                 }
             }
         }

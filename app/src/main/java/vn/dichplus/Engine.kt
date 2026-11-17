@@ -1,9 +1,16 @@
 package vn.dichplus
 
+import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.*
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import androidx.core.content.FileProvider
+import java.io.File
 import android.text.StaticLayout
 import android.text.TextPaint
 import androidx.exifinterface.media.ExifInterface
@@ -36,6 +43,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.tasks.await
 import kotlin.math.max
+import kotlin.math.min
 
 object Engine {
     data class Result(val text: String, val detected: String?)
@@ -153,16 +161,19 @@ object Engine {
     /** OCR ảnh -> dịch từng khối chữ -> vẽ bản dịch đè lên ảnh gốc. */
     suspend fun translateImage(bmp: Bitmap, src: String, tgt: String): Bitmap {
         val best = recognize(InputImage.fromBitmap(bmp, 0), src)
-        val blocks = best?.textBlocks.orEmpty().filter { it.boundingBox != null && it.text.isNotBlank() }
+        val sc = bmp.width / 1080f
+        val blocks = best?.textBlocks.orEmpty().filter {
+            val bb = it.boundingBox
+            bb != null && bb.height() >= 10 * sc && it.text.count { ch -> ch.isLetter() } >= 2
+        }
         val gate = Semaphore(4)
         val items = coroutineScope {
             blocks.map { b ->
                 async {
                     gate.withPermit {
-                        val rect = b.boundingBox!!
                         val txt = b.text.replace('\n', ' ')
                         val out = runCatching { blockTranslate(txt, src, tgt) }.getOrNull()
-                        if (out == null) null else rect to out
+                        if (out == null) null else Item(b.boundingBox!!, out, b.lines.size)
                     }
                 }
             }.awaitAll().filterNotNull()
@@ -183,53 +194,123 @@ object Engine {
         return r.text
     }
 
-    private fun render(src: Bitmap, items: List<Pair<Rect, String>>): Bitmap {
+    private class Item(val rect: Rect, val text: String, val lines: Int)
+
+    private fun layoutOf(t: String, tp: TextPaint, size: Float, w: Int): StaticLayout {
+        tp.textSize = size
+        return StaticLayout.Builder.obtain(t, 0, t.length, tp, max(w, 1)).setLineSpacing(0f, 0.95f).build()
+    }
+
+    /** Vẽ bản dịch đè lên ảnh gốc: nền theo màu nền thật, chữ theo màu chữ gốc, cỡ chữ theo cỡ chữ gốc. */
+    private fun render(src: Bitmap, items: List<Item>): Bitmap {
         val out = src.copy(Bitmap.Config.ARGB_8888, true)
         val c = Canvas(out)
-        val bg = Paint()
+        val bg = Paint(Paint.ANTI_ALIAS_FLAG)
         val tp = TextPaint(Paint.ANTI_ALIAS_FLAG)
         val sc = src.width / 1080f
-        for ((r0, t) in items) {
-            val r = Rect(r0)
-            r.inset(-(4 * sc).toInt(), -(2 * sc).toInt())
+        for (item in items) {
+            val pad = max(2, (3 * sc).toInt())
+            val r = Rect(item.rect).apply { inset(-pad, -pad / 2 - 1) }
             if (!r.intersect(0, 0, src.width, src.height)) continue
-            val col = sample(src, r)
-            bg.color = col
-            c.drawRect(r, bg)
-            tp.color = if (lum(col) > 140) Color.BLACK else Color.WHITE
-            val w = max(r.width(), 1)
-            val minSize = 18 * sc
-            var size = (r.height() * 0.9f).coerceIn(minSize, 56 * sc)
-            var layout: StaticLayout
-            while (true) {
-                tp.textSize = size
-                layout = StaticLayout.Builder.obtain(t, 0, t.length, tp, w).build()
-                if (layout.height <= r.height() || size <= minSize) break
-                size -= 1.5f * sc
+
+            val lineH = item.rect.height().toFloat() / max(1, item.lines)
+            val startSize = (lineH * 0.78f).coerceIn(14 * sc, 64 * sc)
+            val minSize = max(12 * sc, startSize * 0.55f)
+
+            var w = r.width()
+            var size = startSize
+            var layout = layoutOf(item.text, tp, size, w)
+            while (layout.height > r.height() && size > minSize) {
+                size -= 1f * sc
+                layout = layoutOf(item.text, tp, size, w)
             }
+            if (layout.height > r.height() * 1.1f) {
+                // vẫn dài hơn khung: nới ngang tối đa 1,7 lần (không vượt mép ảnh) rồi vừa cỡ lại
+                w = max(w, min(src.width - r.left, (r.width() * 1.7f).toInt()))
+                size = startSize
+                layout = layoutOf(item.text, tp, size, w)
+                while (layout.height > r.height() * 1.1f && size > minSize) {
+                    size -= 1f * sc
+                    layout = layoutOf(item.text, tp, size, w)
+                }
+            }
+            val box = Rect(r.left, r.top, min(src.width, r.left + w), min(src.height, max(r.bottom, r.top + layout.height + 2)))
+            val bgc = bgColor(src, box)
+            val fg = fgColor(src, item.rect, bgc)
+            bg.color = bgc
+            c.drawRoundRect(RectF(box), 3 * sc, 3 * sc, bg)
+            tp.color = fg
             c.save()
-            c.translate(r.left.toFloat(), r.top.toFloat())
+            c.translate(box.left.toFloat(), box.top + max(0f, (box.height() - layout.height) / 2f))
             layout.draw(c)
             c.restore()
         }
         return out
     }
 
-    fun sample(b: Bitmap, r: Rect): Int {
-        val mx = (r.left + r.right) / 2
-        val pts = listOf(
-            r.left to r.top, r.right - 1 to r.top, r.left to r.bottom - 1,
-            r.right - 1 to r.bottom - 1, mx to r.top, mx to r.bottom - 1
-        )
-        var rr = 0; var gg = 0; var bb = 0
-        for ((x, y) in pts) {
+    private fun median(l: MutableList<Int>): Int { l.sort(); return l[l.size / 2] }
+
+    /** Màu nền: trung vị các điểm ngay sát ngoài khung chữ (không bị lẫn nét chữ). */
+    private fun bgColor(b: Bitmap, r: Rect): Int {
+        val rs = ArrayList<Int>(); val gs = ArrayList<Int>(); val bs = ArrayList<Int>()
+        fun add(x: Int, y: Int) {
             val p = b.getPixel(x.coerceIn(0, b.width - 1), y.coerceIn(0, b.height - 1))
-            rr += Color.red(p); gg += Color.green(p); bb += Color.blue(p)
+            rs.add(Color.red(p)); gs.add(Color.green(p)); bs.add(Color.blue(p))
         }
-        return Color.rgb(rr / pts.size, gg / pts.size, bb / pts.size)
+        val n = 8
+        for (i in 0..n) {
+            val x = r.left + r.width() * i / n
+            add(x, r.top - 2); add(x, r.bottom + 1)
+            val y = r.top + r.height() * i / n
+            add(r.left - 2, y); add(r.right + 1, y)
+        }
+        return Color.rgb(median(rs), median(gs), median(bs))
+    }
+
+    /** Màu chữ: lấy từ các điểm trong khung xa màu nền nhất; không đủ tương phản thì dùng đen/trắng. */
+    private fun fgColor(b: Bitmap, r: Rect, bg: Int): Int {
+        val pts = ArrayList<Int>()
+        for (iy in 1..4) for (ix in 0..9) {
+            val x = (r.left + r.width() * (ix + 0.5f) / 10f).toInt().coerceIn(0, b.width - 1)
+            val y = (r.top + r.height() * iy / 5f).toInt().coerceIn(0, b.height - 1)
+            pts.add(b.getPixel(x, y))
+        }
+        fun dist(p: Int): Int {
+            val dr = Color.red(p) - Color.red(bg); val dg = Color.green(p) - Color.green(bg); val db = Color.blue(p) - Color.blue(bg)
+            return dr * dr + dg * dg + db * db
+        }
+        val far = pts.sortedByDescending { dist(it) }.take(max(3, pts.size / 5))
+        val fg = Color.rgb(far.sumOf { Color.red(it) } / far.size, far.sumOf { Color.green(it) } / far.size, far.sumOf { Color.blue(it) } / far.size)
+        return if (kotlin.math.abs(lum(fg) - lum(bg)) >= 90) fg else if (lum(bg) > 140) Color.BLACK else Color.WHITE
     }
 
     fun lum(c: Int) = 0.299 * Color.red(c) + 0.587 * Color.green(c) + 0.114 * Color.blue(c)
+
+    fun saveToGallery(ctx: Context, bmp: Bitmap): Boolean {
+        if (Build.VERSION.SDK_INT < 29) return false
+        return runCatching {
+            val v = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "DichPlus_${System.currentTimeMillis()}.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/DichPlus")
+            }
+            val uri = ctx.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v)!!
+            ctx.contentResolver.openOutputStream(uri)!!.use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+            true
+        }.getOrDefault(false)
+    }
+
+    fun shareBitmap(ctx: Context, bmp: Bitmap) {
+        runCatching {
+            val dir = File(ctx.cacheDir, "images").apply { mkdirs() }
+            val f = File(dir, "dich_share.jpg")
+            f.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fp", f)
+            val i = Intent(Intent.ACTION_SEND).setType("image/jpeg")
+                .putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            ctx.startActivity(Intent.createChooser(i, "Chia sẻ ảnh đã dịch").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
 
     fun loadBitmap(ctx: Context, uri: Uri, maxSide: Int = 2048): Bitmap? {
         val cr = ctx.contentResolver
