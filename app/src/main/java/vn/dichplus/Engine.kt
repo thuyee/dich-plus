@@ -215,7 +215,7 @@ object Engine {
         return out
     }
 
-    private fun sample(b: Bitmap, r: Rect): Int {
+    fun sample(b: Bitmap, r: Rect): Int {
         val mx = (r.left + r.right) / 2
         val pts = listOf(
             r.left to r.top, r.right - 1 to r.top, r.left to r.bottom - 1,
@@ -229,7 +229,7 @@ object Engine {
         return Color.rgb(rr / pts.size, gg / pts.size, bb / pts.size)
     }
 
-    private fun lum(c: Int) = 0.299 * Color.red(c) + 0.587 * Color.green(c) + 0.114 * Color.blue(c)
+    fun lum(c: Int) = 0.299 * Color.red(c) + 0.587 * Color.green(c) + 0.114 * Color.blue(c)
 
     fun loadBitmap(ctx: Context, uri: Uri, maxSide: Int = 2048): Bitmap? {
         val cr = ctx.contentResolver

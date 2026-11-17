@@ -121,17 +121,6 @@ class ScreenService : Service() {
     private fun setupCapture() {
         val (w, h) = screenSize()
         val r = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
-        r.setOnImageAvailableListener({ rd ->
-            val img = try { rd.acquireLatestImage() } catch (e: Exception) { null }
-            if (img != null) {
-                if (pending && SystemClock.uptimeMillis() - requestAt > 300) {
-                    pending = false
-                    val bmp = toBitmap(img)
-                    img.close()
-                    onCaptured(bmp)
-                } else img.close()
-            }
-        }, handler)
         reader = r
         display = projection!!.createVirtualDisplay(
             "dichplus", w, h, resources.displayMetrics.densityDpi,
@@ -247,19 +236,28 @@ class ScreenService : Service() {
 
     private fun capture() {
         if (busy) return
-        dismissMenu()
         busy = true
+        dismissMenu()
         bubble?.visibility = View.INVISIBLE
-        pending = true
-        requestAt = SystemClock.uptimeMillis()
-        val id = ++reqId
-        handler.postDelayed({
-            if (pending && id == reqId) {
-                pending = false; busy = false
-                bubble?.visibility = View.VISIBLE
-                toast("Không chụp được màn hình, thử lại nhé")
+        var tries = 0
+        val grab = object : Runnable {
+            override fun run() {
+                val img = try { reader?.acquireLatestImage() } catch (e: Exception) { null }
+                if (img != null) {
+                    val bmp = toBitmap(img)
+                    img.close()
+                    onCaptured(bmp)
+                } else if (++tries < 10) {
+                    handler.postDelayed(this, 200)
+                } else {
+                    busy = false
+                    bubble?.visibility = View.VISIBLE
+                    toast("Không chụp được màn hình, thử lại nhé")
+                }
             }
-        }, 2500)
+        }
+        // chờ bong bóng ẩn hẳn rồi lấy khung hình mới nhất
+        handler.postDelayed(grab, 350)
     }
 
     private fun onCaptured(bmp: Bitmap) {

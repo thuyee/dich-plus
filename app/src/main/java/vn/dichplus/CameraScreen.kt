@@ -2,7 +2,10 @@ package vn.dichplus
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Color as AColor
+import android.graphics.Matrix
+import android.graphics.Rect
 import android.graphics.Paint
 import android.graphics.RectF
 import android.net.Uri
@@ -18,6 +21,7 @@ import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -70,21 +74,32 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
-private class LiveBox(val rect: RectF, val text: String)
+private class LiveBox(val rect: RectF, val text: String, val bg: Int, val fg: Int, val size: Float)
 
-private val boxBg = Paint().apply { color = AColor.argb(225, 16, 20, 24) }
-private val boxText = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = AColor.WHITE }
+private val boxBg = Paint()
+private val boxText = TextPaint(Paint.ANTI_ALIAS_FLAG)
 
-private fun drawBox(c: android.graphics.Canvas, r: RectF, t: String, d: Float) {
-    c.drawRoundRect(r, 6f * d, 6f * d, boxBg)
+private fun liveBitmap(proxy: ImageProxy, rot: Int): Bitmap? = runCatching {
+    val b = proxy.toBitmap()
+    if (rot == 0) b
+    else Bitmap.createBitmap(b, 0, 0, b.width, b.height, Matrix().apply { postRotate(rot.toFloat()) }, true)
+}.getOrNull()
+
+/** Vẽ bản dịch ngay trên chữ gốc: nền lấy theo màu nền thật, cỡ chữ theo cỡ chữ gốc. */
+private fun drawBox(c: android.graphics.Canvas, r0: RectF, b: LiveBox, d: Float, sc: Float) {
+    val r = RectF(r0).apply { inset(-3f * d, -2f * d) }
+    boxBg.color = AColor.argb(250, AColor.red(b.bg), AColor.green(b.bg), AColor.blue(b.bg))
+    c.drawRoundRect(r, 4f * d, 4f * d, boxBg)
+    boxText.color = b.fg
     val w = max(r.width().toInt(), 1)
-    var size = (r.height() * 0.8f).coerceIn(11f * d, 22f * d)
+    val minSize = 9f * d
+    var size = (b.size * sc).coerceIn(minSize, 42f * d)
     var layout: StaticLayout
     while (true) {
         boxText.textSize = size
-        layout = StaticLayout.Builder.obtain(t, 0, t.length, boxText, w).build()
-        if (layout.height <= r.height() || size <= 10f * d) break
-        size -= d
+        layout = StaticLayout.Builder.obtain(b.text, 0, b.text.length, boxText, w).build()
+        if (layout.height <= r.height() || size <= minSize) break
+        size -= 0.5f * d
     }
     c.save()
     c.translate(r.left, r.top + max(0f, (r.height() - layout.height) / 2f))
@@ -165,12 +180,22 @@ fun CameraScreen(
                         val text = Engine.recognize(input, src)
                         val blocks = text?.textBlocks.orEmpty()
                             .filter { it.boundingBox != null && it.text.isNotBlank() }.take(30)
+                        val bmp = liveBitmap(proxy, rot)
                         val res = blocks.map { b ->
                             async {
                                 val t = b.text.replace('\n', ' ')
                                 val tr = cache[t] ?: (runCatching { Engine.blockTranslate(t, src, tgt) }.getOrNull() ?: "")
                                     .also { cache[t] = it }
-                                if (tr.isEmpty()) null else LiveBox(RectF(b.boundingBox!!), tr)
+                                if (tr.isEmpty()) null else {
+                                    val rect = b.boundingBox!!
+                                    val bg = if (bmp != null)
+                                        runCatching { Engine.sample(bmp, Rect(rect).apply { inset(-3, -3) }) }
+                                            .getOrDefault(AColor.rgb(16, 20, 24))
+                                    else AColor.rgb(16, 20, 24)
+                                    val fg = if (Engine.lum(bg) > 140) AColor.BLACK else AColor.WHITE
+                                    val size = rect.height().toFloat() / max(1, b.lines.size) * 0.8f
+                                    LiveBox(RectF(rect), tr, bg, fg, size)
+                                }
                             }
                         }.awaitAll().filterNotNull()
                         imgW = w; imgH = h; live = res
@@ -223,7 +248,7 @@ fun CameraScreen(
                             b.rect.left * sc + ox, b.rect.top * sc + oy,
                             b.rect.right * sc + ox, b.rect.bottom * sc + oy
                         )
-                        drawBox(c.nativeCanvas, r, b.text, density)
+                        drawBox(c.nativeCanvas, r, b, density, sc)
                     }
                 }
             }
