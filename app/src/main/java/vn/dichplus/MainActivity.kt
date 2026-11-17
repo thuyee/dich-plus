@@ -113,7 +113,9 @@ fun App() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
-    val prefs = remember { ctx.getSharedPreferences("p", Context.MODE_PRIVATE) }
+    val prefs = remember { ctx.getSharedPreferences("p", Context.MODE_PRIVATE).also { Engine.init(ctx) } }
+    var engine by remember { mutableStateOf(prefs.getString("engine", "gtx") ?: "gtx") }
+    var apiKey by remember { mutableStateOf(prefs.getString("apikey", "") ?: "") }
 
     var src by remember { mutableStateOf(prefs.getString("src", "en") ?: "en") }
     var tgt by remember { mutableStateOf(prefs.getString("tgt", "vi") ?: "vi") }
@@ -133,7 +135,7 @@ fun App() {
     LaunchedEffect(src, tgt) { prefs.edit().putString("src", src).putString("tgt", tgt).apply() }
 
     // dịch tự động khi gõ
-    LaunchedEffect(input, src, tgt) {
+    LaunchedEffect(input, src, tgt, engine, apiKey) {
         if (input.isBlank()) { output = ""; status = null; return@LaunchedEffect }
         delay(500)
         status = "Đang dịch…"
@@ -142,7 +144,7 @@ fun App() {
             output = r.text; detected = r.detected; status = null
         } catch (e: Exception) {
             output = ""
-            status = "Không dịch được. Lần đầu cần mạng để tải gói ngôn ngữ."
+            status = "Không dịch được. Kiểm tra mạng (lần đầu ML Kit cần mạng để tải gói ngôn ngữ)."
         }
     }
 
@@ -396,21 +398,53 @@ fun App() {
     }
 
     if (showSettings) {
-        AlertDialog(
-            onDismissRequest = { showSettings = false },
-            title = { Text("Dịch màn hình") },
-            text = {
-                Text(
-                    "• Bấm “Dịch màn hình” → cho phép chụp màn hình → bong bóng nổi xuất hiện.\n" +
-                        "• Chạm bong bóng để dịch màn hình hiện tại, chạm lại để đóng.\n" +
-                        "• Nhấn giữ bong bóng (hoặc nút Tắt ở thông báo) để tắt.\n" +
-                        "• Ngôn ngữ nguồn/đích lấy theo hai nút ở màn hình chính.\n" +
-                        "• Không quảng cáo. Dịch chạy ngay trên máy sau khi tải gói ngôn ngữ."
-                )
-            },
-            confirmButton = { TextButton({ showSettings = false }) { Text("Đóng") } },
-            dismissButton = { TextButton({ requestOverlay() }) { Text("Cấp quyền hiển thị") } }
-        )
+        Dialog({ showSettings = false }) {
+            Surface(shape = RoundedCornerShape(24.dp), color = Color(0xFF2B2B2B)) {
+                Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState())) {
+                    Text("Công cụ dịch", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.height(8.dp))
+                    listOf(
+                        "gtx" to "Google Dịch online (miễn phí, chất lượng tốt nhất)",
+                        "gcloud" to "Google Cloud Translation API (dùng API key riêng)",
+                        "mlkit" to "Trên máy – ML Kit (offline)"
+                    ).forEach { (k, label) ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { engine = k; prefs.edit().putString("engine", k).apply() },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = engine == k, onClick = { engine = k; prefs.edit().putString("engine", k).apply() })
+                            Text(label, color = Color.White, fontSize = 15.sp)
+                        }
+                    }
+                    if (engine == "gcloud") {
+                        OutlinedTextField(
+                            value = apiKey,
+                            onValueChange = { apiKey = it; prefs.edit().putString("apikey", it.trim()).apply() },
+                            label = { Text("API key") }, singleLine = true,
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                        )
+                    }
+                    Text(
+                        "Chế độ online gửi đoạn chữ cần dịch tới Google. Nếu lỗi hoặc mất mạng, app tự quay về ML Kit.",
+                        color = Hint, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)
+                    )
+                    HorizontalDivider(Modifier.padding(vertical = 14.dp), color = Color(0xFF444444))
+                    Text("Dịch màn hình", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        "• Bấm “Dịch màn hình” → cho phép chụp màn hình → bong bóng nổi xuất hiện.\n" +
+                            "• Chạm bong bóng để dịch, chạm màn hình để đóng bản dịch.\n" +
+                            "• Nhấn giữ bong bóng (hoặc nút Tắt ở thông báo) để tắt.\n" +
+                            "• Ngôn ngữ lấy theo hai nút ở màn hình chính.\n" +
+                            "• Không quảng cáo, không theo dõi.",
+                        color = Color(0xFFE0E0E0), fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp)
+                    )
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                        TextButton({ requestOverlay() }) { Text("Cấp quyền hiển thị") }
+                        TextButton({ showSettings = false }) { Text("Đóng") }
+                    }
+                }
+            }
+        }
     }
 
     resultBmp?.let { bmp ->

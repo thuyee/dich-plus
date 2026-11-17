@@ -70,6 +70,7 @@ class ScreenService : Service() {
         }
         if (projection != null) return START_NOT_STICKY
 
+        Engine.init(this)
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Dịch màn hình", NotificationManager.IMPORTANCE_LOW))
