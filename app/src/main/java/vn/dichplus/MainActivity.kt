@@ -240,12 +240,27 @@ fun App() {
             onPickGallery = { pickPic.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onPhoto = { processUri(it) }
         )
-    } else Column(Modifier.fillMaxSize().background(BgOuter).systemBarsPadding()) {
+    } else Column(Modifier.fillMaxSize().background(BgOuter).systemBarsPadding().imePadding()) {
+        val hasText = input.isNotEmpty()
+        val srcShown = if (src == "auto") (detected?.let { langName(it) } ?: "Phát hiện ngôn ngữ") else langName(src)
+        val bodyStyle = TextStyle(color = Color.White, fontSize = 17.sp, lineHeight = 24.sp)
+        val bigStyle = TextStyle(color = Color.White, fontSize = 34.sp, lineHeight = 42.sp)
+        fun speak(t: String, tag: String?) {
+            if (tag != null) tts.language = Locale.forLanguageTag(tag)
+            tts.speak(t, TextToSpeech.QUEUE_FLUSH, null, "x")
+        }
+        fun saveCurrent() {
+            if (output.isNotEmpty()) {
+                saved.add(0, input.trim() to output); storeSaved(prefs, saved)
+                Toast.makeText(ctx, "Đã lưu", Toast.LENGTH_SHORT).show()
+            }
+        }
         Column(
             Modifier.weight(1f).fillMaxWidth()
                 .clip(RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp))
                 .background(BgCard)
         ) {
+            if (!hasText) {
             // thanh trên: ★ | Dịch + nút Dịch màn hình | cài đặt
             Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
                 IconButton({ showSaved = true }, Modifier.align(Alignment.TopStart)) {
@@ -270,47 +285,88 @@ fun App() {
                 }
             }
 
-            // vùng nhập + kết quả
+            } else {
+                // thanh trên khi đã nhập chữ: ← ✕ ☆ ⋮ (giống màn hình kết quả của Google Dịch)
+                var menu by remember { mutableStateOf(false) }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton({ input = ""; output = "" }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Quay lại", tint = Color(0xFFE0E0E0))
+                    }
+                    Spacer(Modifier.weight(1f))
+                    IconButton({ input = ""; output = "" }) { Icon(Icons.Filled.Close, "Xóa", tint = Color(0xFFE0E0E0)) }
+                    IconButton({ saveCurrent() }) { Icon(Icons.Outlined.StarBorder, "Lưu", tint = Color(0xFFE0E0E0)) }
+                    Box {
+                        IconButton({ menu = true }) { Icon(Icons.Filled.MoreVert, "Thêm", tint = Color(0xFFE0E0E0)) }
+                        DropdownMenu(menu, { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Sao chép bản dịch") },
+                                onClick = { menu = false; clipboard.setText(AnnotatedString(output)) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Chia sẻ bản dịch") },
+                                onClick = {
+                                    menu = false
+                                    ctx.startActivity(
+                                        Intent.createChooser(
+                                            Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, output),
+                                            "Chia sẻ"
+                                        )
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
             Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(if (hasText) 8.dp else 12.dp))
+                if (hasText) Text(srcShown, color = Color(0xFFE2D3CF), fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 Row(verticalAlignment = Alignment.Top) {
-                    Box(Modifier.weight(1f)) {
+                    Box(Modifier.weight(1f).padding(top = if (hasText) 12.dp else 0.dp)) {
                         BasicTextField(
                             value = input, onValueChange = { input = it },
-                            textStyle = TextStyle(color = Color.White, fontSize = 34.sp),
+                            textStyle = if (hasText) bodyStyle else bigStyle,
                             cursorBrush = SolidColor(Color.White), modifier = Modifier.fillMaxWidth()
                         )
-                        if (input.isEmpty()) Text("Dịch văn bản", fontSize = 34.sp, color = Hint)
+                        if (!hasText) Text("Dịch văn bản", fontSize = 34.sp, lineHeight = 42.sp, color = Hint)
                     }
-                    if (input.isEmpty()) {
+                    if (!hasText) {
                         IconButton({ clipboard.getText()?.text?.let { input = it } }) {
                             Icon(Icons.Outlined.Draw, "Dán", tint = Color(0xFFD6D6D6))
                         }
-                    } else {
-                        IconButton({ input = ""; output = "" }) {
-                            Icon(Icons.Filled.Close, "Xóa", tint = Color(0xFFD6D6D6))
-                        }
                     }
                 }
-                if (output.isNotEmpty()) {
-                    HorizontalDivider(Modifier.padding(vertical = 20.dp), color = Color(0xFF333333))
-                    Text(output, fontSize = 30.sp, color = OutBlue)
-                    Row(Modifier.padding(top = 8.dp)) {
-                        IconButton({ clipboard.setText(AnnotatedString(output)) }) {
-                            Icon(Icons.Outlined.ContentCopy, "Sao chép", tint = Color(0xFFD6D6D6))
+                if (hasText) {
+                    Row(Modifier.fillMaxWidth().padding(top = 20.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        IconButton({ speak(input, if (src == "auto") detected else src) }) {
+                            Icon(Icons.Outlined.VolumeUp, "Đọc", tint = Color(0xFFE0E0E0))
                         }
-                        IconButton({
-                            tts.language = Locale.forLanguageTag(tgt)
-                            tts.speak(output, TextToSpeech.QUEUE_FLUSH, null, "o")
-                        }) { Icon(Icons.Outlined.VolumeUp, "Đọc", tint = Color(0xFFD6D6D6)) }
-                        IconButton({
-                            saved.add(0, input.trim() to output); storeSaved(prefs, saved)
-                            Toast.makeText(ctx, "Đã lưu", Toast.LENGTH_SHORT).show()
-                        }) { Icon(Icons.Outlined.StarBorder, "Lưu", tint = Color(0xFFD6D6D6)) }
+                        IconButton({ clipboard.setText(AnnotatedString(input)) }) {
+                            Icon(Icons.Outlined.ContentCopy, "Sao chép", tint = Color(0xFFE0E0E0))
+                        }
                     }
+                    Box(Modifier.fillMaxWidth().padding(vertical = 28.dp), contentAlignment = Alignment.Center) {
+                        Box(Modifier.fillMaxWidth(0.53f).height(1.5.dp).background(Color(0xFF5B4A44)))
+                    }
+                    Text(langName(tgt), color = Salmon, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    if (output.isNotEmpty()) {
+                        Text(
+                            output, color = Salmon, fontSize = 18.sp, lineHeight = 26.sp,
+                            modifier = Modifier.padding(top = 12.dp)
+                        )
+                        Row(Modifier.fillMaxWidth().padding(top = 20.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                            IconButton({ speak(output, tgt) }) {
+                                Icon(Icons.Outlined.VolumeUp, "Đọc", tint = Color(0xFFE0E0E0))
+                            }
+                            IconButton({ clipboard.setText(AnnotatedString(output)) }) {
+                                Icon(Icons.Outlined.ContentCopy, "Sao chép", tint = Color(0xFFE0E0E0))
+                            }
+                        }
+                    }
+                    status?.let { Text(it, color = Color(0xFFFFB4AB), modifier = Modifier.padding(top = 12.dp)) }
                 }
-                status?.let { Text(it, color = Color(0xFFFFB4AB), modifier = Modifier.padding(top = 12.dp)) }
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(24.dp))
             }
             Box(Modifier.fillMaxWidth().padding(bottom = 12.dp), contentAlignment = Alignment.Center) {
                 Box(Modifier.width(100.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color(0xFF444444)))
@@ -327,6 +383,7 @@ fun App() {
             LangButton(langName(tgt), Modifier.weight(1f)) { pick = "tgt" }
         }
 
+        if (!hasText) {
         // hàng nút dưới: Dịch trực tiếp | mic | Máy ảnh
         Row(
             Modifier.fillMaxWidth().padding(bottom = 16.dp),
@@ -339,6 +396,7 @@ fun App() {
                 contentAlignment = Alignment.Center
             ) { Icon(Icons.Filled.Mic, "Nói", tint = SalmonDark, modifier = Modifier.size(38.dp)) }
             SideButton(Icons.Filled.CameraAlt, "Máy ảnh") { screen = "camera" }
+        }
         }
     }
 
